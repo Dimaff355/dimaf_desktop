@@ -61,3 +61,17 @@ This repository tracks the requirements for a peer-to-peer remote desktop soluti
 2. **Stage 2 – Core & Multi-Monitor:** Implement signaling/resolver, GUI + IPC, monitor switching, and basic mouse/keyboard input (tied to active monitor).
 3. **Stage 3 – Advanced Integration:** WTS session switching, UAC/logon capture, secure input including Ctrl+Alt+Del.
 4. **Stage 4 – Polish:** Password hashing, config ACLs, logging with rotation, reconnection logic, DPI handling, and resolver updates.
+
+## Additional Documentation
+- [Architecture](docs/ARCHITECTURE.md): detailed component responsibilities, configuration model, data channel protocol, reconnect flows, and operational notes.
+
+## Code Layout
+- `src/Shared`: reusable contracts for configuration, messaging, monitor descriptors, and password hashing (BCrypt by default).
+- `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, provides signaling resolver/WebSocket scaffolding, and stubs capture initialization for the host core.
+
+## Running the headless host prototype
+- Restore tools and run the worker service: `dotnet run --project src/Service`.
+- On successful resolver + WebSocket connection, the service immediately advertises the host ID, monitor list, and active monitor over signaling.
+- Operators begin by sending `{ "type": "operator_hello", "session_id": "<guid>" }` followed by `{ "type": "auth", "password": "<plaintext>" }`.
+  - The host enforces the single-operator rule; concurrent session IDs receive `host_busy`.
+  - Monitor list and switch responses reuse the data-channel message shapes (`monitor_list`, `monitor_switch`, `monitor_switch_result`).
