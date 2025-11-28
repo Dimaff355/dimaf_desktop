@@ -68,3 +68,10 @@ This repository tracks the requirements for a peer-to-peer remote desktop soluti
 ## Code Layout
 - `src/Shared`: reusable contracts for configuration, messaging, monitor descriptors, and password hashing (BCrypt by default).
 - `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, provides signaling resolver/WebSocket scaffolding, and stubs capture initialization for the host core.
+
+## Running the headless host prototype
+- Restore tools and run the worker service: `dotnet run --project src/Service`.
+- On successful resolver + WebSocket connection, the service immediately advertises the host ID, monitor list, and active monitor over signaling.
+- Operators begin by sending `{ "type": "operator_hello", "session_id": "<guid>" }` followed by `{ "type": "auth", "password": "<plaintext>" }`.
+  - The host enforces the single-operator rule; concurrent session IDs receive `host_busy`.
+  - Monitor list and switch responses reuse the data-channel message shapes (`monitor_list`, `monitor_switch`, `monitor_switch_result`).

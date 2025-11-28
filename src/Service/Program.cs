@@ -11,6 +11,7 @@ builder.Services.AddSingleton<IPasswordHasher, BCryptPasswordHasher>();
 builder.Services.AddSingleton<SignalingResolver>();
 builder.Services.AddSingleton<WebSocketSignalingClient>();
 builder.Services.AddSingleton<SessionManager>();
+builder.Services.AddSingleton<MonitorService>();
 builder.Services.AddHttpClient();
 builder.Services.AddHostedService<HostService>();
 

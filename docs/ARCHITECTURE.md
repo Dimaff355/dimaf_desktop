@@ -55,6 +55,8 @@ Messages are JSON objects with a `type` discriminant. Core verbs:
 | `host_busy` | Host → Operator | `{ "reason": "active_session" }` | Sent to second operator if a session is already active. |
 | `ice_state` | Either | `{ "state": "checking" | "connected" | "failed" | "disconnected" }` | For UI surfacing and reconnect triggers. |
 
+The signaling channel mirrors these verbs for the headless prototype. Operators begin with `operator_hello` (session claim), receive `host_hello` (host ID and active monitor), and may request `monitor_list` or `monitor_switch` before WebRTC wiring lands. Single-session enforcement applies equally across signaling and data-channel traffic.
+
 ## Session Lifecycle and Reconnects
 
 1. **Resolver Polling**: Service and client poll the resolver URL every 5–10 minutes with exponential backoff on failure. On change, they reconnect WebSocket signaling gracefully and attempt to preserve ongoing P2P sessions; if not possible, they tear down and re-establish.

@@ -9,10 +9,18 @@ public sealed class WebSocketSignalingClient : IAsyncDisposable
     private readonly ILogger<WebSocketSignalingClient> _logger;
     private ClientWebSocket? _socket;
     private CancellationTokenSource? _receiveCts;
+    private Func<string, CancellationToken, Task>? _onTextMessage;
+
+    public event Action? Disconnected;
 
     public WebSocketSignalingClient(ILogger<WebSocketSignalingClient> logger)
     {
         _logger = logger;
+    }
+
+    public void SetMessageHandler(Func<string, CancellationToken, Task> handler)
+    {
+        _onTextMessage = handler;
     }
 
     public async Task ConnectAsync(Uri endpoint, CancellationToken cancellationToken)
@@ -56,8 +64,21 @@ public sealed class WebSocketSignalingClient : IAsyncDisposable
                 }
 
                 var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
-                _logger.LogInformation("Received signaling payload: {Payload}", text);
-                // TODO: Dispatch signaling messages to the WebRTC stack.
+                if (_onTextMessage is not null)
+                {
+                    try
+                    {
+                        await _onTextMessage(text, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Unhandled exception in signaling message handler");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Received signaling payload: {Payload}", text);
+                }
             }
         }
         catch (OperationCanceledException)
@@ -67,6 +88,10 @@ public sealed class WebSocketSignalingClient : IAsyncDisposable
         catch (WebSocketException ex)
         {
             _logger.LogWarning(ex, "Signaling socket faulted");
+        }
+        finally
+        {
+            Disconnected?.Invoke();
         }
     }
 

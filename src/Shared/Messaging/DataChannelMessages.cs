@@ -37,7 +37,8 @@ public sealed record AuthResult(
 }
 
 public sealed record MonitorList(
-    [property: JsonPropertyName("monitors")] IReadOnlyList<MonitorDescriptor> Monitors
+    [property: JsonPropertyName("monitors")] IReadOnlyList<MonitorDescriptor> Monitors,
+    [property: JsonPropertyName("active_monitor_id")] string ActiveMonitorId
 ) : IDataChannelMessage
 {
     [JsonPropertyName("type")]
