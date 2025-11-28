@@ -67,4 +67,4 @@ This repository tracks the requirements for a peer-to-peer remote desktop soluti
 
 ## Code Layout
 - `src/Shared`: reusable contracts for configuration, messaging, monitor descriptors, and password hashing (BCrypt by default).
-- `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, and stubs networking/capture initialization for the host core.
+- `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, provides signaling resolver/WebSocket scaffolding, and stubs capture initialization for the host core.

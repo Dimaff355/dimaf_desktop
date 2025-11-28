@@ -11,17 +11,26 @@ public sealed class HostService : BackgroundService
     private readonly HostConfigProvider _configProvider;
     private readonly LockoutManager _lockoutManager;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly SignalingResolver _signalingResolver;
+    private readonly WebSocketSignalingClient _signalingClient;
+    private readonly SessionManager _sessionManager;
     private readonly ILogger<HostService> _logger;
 
     public HostService(
         HostConfigProvider configProvider,
         LockoutManager lockoutManager,
         IPasswordHasher passwordHasher,
+        SignalingResolver signalingResolver,
+        WebSocketSignalingClient signalingClient,
+        SessionManager sessionManager,
         ILogger<HostService> logger)
     {
         _configProvider = configProvider;
         _lockoutManager = lockoutManager;
         _passwordHasher = passwordHasher;
+        _signalingResolver = signalingResolver;
+        _signalingClient = signalingClient;
+        _sessionManager = sessionManager;
         _logger = logger;
     }
 
@@ -40,11 +49,30 @@ public sealed class HostService : BackgroundService
         }
     }
 
-    private Task InitializeNetworkingAsync(HostConfig config, CancellationToken cancellationToken)
+    private async Task InitializeNetworkingAsync(HostConfig config, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Preparing signaling and WebRTC stacks (stun: {StunCount})", config.StunServers.Count);
-        // TODO: Wire up WebSocket signaling, resolver polling, and WebRTC peer connection.
-        return Task.CompletedTask;
+
+        var resolved = await _signalingResolver.ResolveAsync(config.SignalingResolverUrl, cancellationToken).ConfigureAwait(false);
+        if (resolved is null && Uri.TryCreate(config.SignalingResolverUrl, UriKind.Absolute, out var fallback))
+        {
+            resolved = fallback;
+        }
+
+        if (resolved is null)
+        {
+            _logger.LogWarning("No signaling endpoint available; service will keep retrying on next resolver poll");
+            return;
+        }
+
+        try
+        {
+            await _signalingClient.ConnectAsync(resolved, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or System.Net.WebSockets.WebSocketException)
+        {
+            _logger.LogWarning(ex, "Failed to connect to signaling server {Endpoint}", resolved);
+        }
     }
 
     private Task InitializeCaptureAsync(CancellationToken cancellationToken)
