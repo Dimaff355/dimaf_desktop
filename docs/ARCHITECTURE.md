@@ -57,13 +57,6 @@ Messages are JSON objects with a `type` discriminant. Core verbs:
 
 The signaling channel mirrors these verbs for the headless prototype. Operators begin with `operator_hello` (session claim), receive `host_hello` (host ID and active monitor), and may request `monitor_list` or `monitor_switch` before WebRTC wiring lands. Single-session enforcement applies equally across signaling and data-channel traffic.
 
-For the current prototype, GDI capture feeds PNG frames over the same signaling WebSocket after authentication. Frames follow the active monitor selection and provide a sanity-check preview saved to disk by the operator CLI while the WebRTC media path is still under development.
-
-### WebRTC Negotiation (in progress)
-- **Offer/Answer:** Host emits `sdp_offer` (SIPSorcery RTCPeerConnection with STUN servers from config); operator replies with `sdp_answer` after attaching a control data channel.
-- **ICE:** Both parties trickle `ice_candidate` messages with `candidate`, `sdp_mid`, and `sdp_mline_index`, forwarding them over the signaling socket.
-- **State Surfacing:** ICE connection state changes are serialized as `ice_state` messages to keep the UI aware of reconnect needs even while media is still carried over the legacy PNG preview.
-
 ## Session Lifecycle and Reconnects
 
 1. **Resolver Polling**: Service and client poll the resolver URL every 5–10 minutes with exponential backoff on failure. On change, they reconnect WebSocket signaling gracefully and attempt to preserve ongoing P2P sessions; if not possible, they tear down and re-establish.
@@ -81,13 +74,17 @@ For the current prototype, GDI capture feeds PNG frames over the same signaling 
 
 ## Logging and Telemetry
 
-- Host service initializes Serilog sinks writing to `%ProgramData%/P2PRD/logs/service-<date>.log` (10 MB per file, `rollOnFileSizeLimit` with up to 10 files retained) and console output for interactive runs.
+- Rolling file logs (10 MB max, 5 files) stored under `%ProgramData%/P2PRD/logs`.
 - Event categories:
   - **Auth**: success, invalid password, lockout start/end.
   - **Network**: resolver update, WebSocket connect/disconnect, ICE transitions.
   - **Capture**: DXGI failures, fallback to GDI, monitor topology changes.
   - **Service**: WTS session changes, desktop switches, unhandled exceptions.
-- Log format: structured lines from `ILogger`/Serilog templates; additional sinks (JSON, SIEM) can be added without code changes by adjusting the Serilog configuration.
+- Log format: structured JSON lines with timestamp, category, event, severity, and fields; example:
+
+```json
+{"ts":"2024-05-01T12:00:00Z","cat":"auth","evt":"invalid_password","severity":"warn","host_id":"..."}
+```
 
 ## Installation and Deployment Notes
 
