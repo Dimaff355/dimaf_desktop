@@ -12,6 +12,7 @@ public static class MessageTypes
     public const string Input = "input";
     public const string HostBusy = "host_busy";
     public const string IceState = "ice_state";
+    public const string Frame = "frame";
 }
 
 public interface IDataChannelMessage
@@ -77,6 +78,23 @@ public sealed record IceState(
     [JsonPropertyName("type")]
     public string Type => MessageTypes.IceState;
 }
+
+public sealed record FrameChunk(
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height,
+    [property: JsonPropertyName("format")] string Format,
+    [property: JsonPropertyName("data")] string Data
+) : IDataChannelMessage
+{
+    [JsonPropertyName("type")]
+    public string Type => MessageTypes.Frame;
+}
+
+public sealed record FrameBinaryHeader(
+    [property: JsonPropertyName("width")] int Width,
+    [property: JsonPropertyName("height")] int Height,
+    [property: JsonPropertyName("format")] string Format
+);
 
 public sealed record MousePayload(
     [property: JsonPropertyName("x")] double? X,

@@ -67,7 +67,9 @@ This repository tracks the requirements for a peer-to-peer remote desktop soluti
 
 ## Code Layout
 - `src/Shared`: reusable contracts for configuration, messaging, monitor descriptors, and password hashing (BCrypt by default).
-- `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, provides signaling resolver/WebSocket scaffolding, and stubs capture initialization for the host core.
+- `src/Service`: Windows Service host that bootstraps configuration, enforces lockout policy, enumerates monitors, captures frames from the active display (GDI fallback), and streams them over signaling for the prototype.
+- `src/SignalingServer`: lightweight WebSocket relay that pairs a single host with one operator for local/headless testing without a cloud signaling layer.
+- `src/OperatorConsole`: CLI operator that speaks the signaling/data-channel envelopes to exercise the host flow end-to-end.
 
 ## Running the headless host prototype
 - Restore tools and run the worker service: `dotnet run --project src/Service`.
@@ -75,3 +77,35 @@ This repository tracks the requirements for a peer-to-peer remote desktop soluti
 - Operators begin by sending `{ "type": "operator_hello", "session_id": "<guid>" }` followed by `{ "type": "auth", "password": "<plaintext>" }`.
   - The host enforces the single-operator rule; concurrent session IDs receive `host_busy`.
   - Monitor list and switch responses reuse the data-channel message shapes (`monitor_list`, `monitor_switch`, `monitor_switch_result`).
+
+## Running the local signaling relay + operator CLI
+1. Start the signaling relay (defaults to port 5000):
+   - `dotnet run --project src/SignalingServer`
+   - Health probe: `curl http://localhost:5000/health`
+2. Point the host at the relay WebSocket endpoint (bypass the HTTP resolver by setting an absolute URL):
+   - Update `config.json` (generated at `%ProgramData%/P2PRD/config.json` on first run) to set `signaling_resolver_url` to `ws://localhost:5000/ws`.
+   - Run the host worker: `dotnet run --project src/Service`.
+3. Launch the operator CLI with the same endpoint and host ID (GUID from the host config or logs):
+   - `dotnet run --project src/OperatorConsole -- ws://localhost:5000/ws <host-id> <optional-password>`
+4. The operator sends `operator_hello`, requests the monitor list, performs authentication automatically when a password is provided, and begins saving incoming PNG frames under `./frames`.
+  - Enter `monitor_switch` commands interactively to change the active monitor on the host during the session (capture follows the active monitor).
+  - Input commands are available: `mouse <x 0..1> <y 0..1>` to move the cursor on the active monitor, `click <left|right|middle>` to tap buttons, `wheel <delta>` for scroll, and `key <scanCode> <down|up>` for keyboard scan codes.
+  - When the WebRTC control data channel opens, the operator and host automatically migrate control traffic to it, falling back to signaling if the channel drops.
+
+## Building Windows executables
+- Use PowerShell to publish single-file builds (Windows runtime by default, skips trimming):
+  - `pwsh ./scripts/publish.ps1 -Runtime win-x64 -Configuration Release -SelfContained`
+- Or use Bash with the same defaults:
+  - `SELF_CONTAINED=true ./scripts/publish.sh`
+- Outputs land under `artifacts/<runtime>/` and include `P2PRD.Service.exe`, `OperatorConsole.exe`, and `SignalingServer.exe` for installation or distribution on Windows hosts/operators.
+
+## Current implementation status
+- **Working:** Local signaling relay; host handshake flow (hello/auth/monitor list + switch); operator CLI; WebRTC control data channel with ICE trickling/re-offer recovery; dedicated WebRTC frame channel carrying binary PNG payloads (falls back to JSON/base64 when absent); live frame streaming from the active monitor saved for inspection; negotiated VP8 video m-line on the peer connection to pave the way for encoded media; and Windows SendInput-based mouse/keyboard injection bound to the active monitor coordinates.
+- **Not yet implemented:** Actual WebRTC media samples (encoding and RTP pumping on the video track) and high-performance DXGI capture/encoding, a Windows service install/ACL-hardening story, GUI configurator, and UAC/logon desktop handling.
+- **Implication:** The prototype exercises connection/session logic, capture, and input dispatch, negotiates a video track, and pushes frames through WebRTC when possible. It still does not provide low-latency encoded video transport or full production hardening.
+
+## Delivery TODO (tracked in-repo)
+- [x] WebRTC transport: stand up a peer connection with STUN, offer/answer exchange over signaling, ICE candidate trickling, and a control data channel. **Done:** host/operator negotiate control + frame data channels, fall back to signaling if unavailable, and the host re-offers automatically when the ICE state drops.
+- [ ] WebRTC media: attach a real video track sourced from the capture pipeline (DXGI/Desktop Duplication when available, GDI fallback), and migrate away from PNG-over-WebSocket streaming. **In progress:** VP8 video m-line is now offered alongside the control/frame channels; encoder/RTP pumping remains to be wired up.
+- [ ] Input path: ship mouse/keyboard injection bound to the active monitor, and route input over the WebRTC data channel. **In progress:** Operator CLI now emits `input` commands (mouse move, clicks, wheel, and keyboard scan codes) and the host uses SendInput against the active monitor bounds; DPI/UAC-safe injection remains to be added.
+- [ ] Desktop integration: add GUI configurator + IPC, secure install/ACLs, UAC/logon capture, and reconnection resilience per the spec. **In progress:** Host now writes rolling logs under `%ProgramData%/P2PRD/logs` (10MB per file, up to 10 files) and emits to console when run interactively.

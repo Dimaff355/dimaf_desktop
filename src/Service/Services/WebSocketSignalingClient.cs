@@ -63,7 +63,16 @@ public sealed class WebSocketSignalingClient : IAsyncDisposable
                     break;
                 }
 
-                var text = Encoding.UTF8.GetString(buffer, 0, result.Count);
+                using var payloadStream = new MemoryStream();
+                await payloadStream.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
+
+                while (!result.EndOfMessage && !cancellationToken.IsCancellationRequested)
+                {
+                    result = await _socket.ReceiveAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    await payloadStream.WriteAsync(buffer.AsMemory(0, result.Count), cancellationToken).ConfigureAwait(false);
+                }
+
+                var text = Encoding.UTF8.GetString(payloadStream.GetBuffer(), 0, (int)payloadStream.Length);
                 if (_onTextMessage is not null)
                 {
                     try

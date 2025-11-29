@@ -17,6 +17,9 @@ public sealed class HostService : BackgroundService
     private readonly WebSocketSignalingClient _signalingClient;
     private readonly SessionManager _sessionManager;
     private readonly MonitorService _monitorService;
+    private readonly CaptureService _captureService;
+    private readonly InputService _inputService;
+    private readonly WebRtcService _webRtcService;
     private readonly ILogger<HostService> _logger;
 
     private readonly JsonSerializerOptions _serializerOptions = new()
@@ -29,6 +32,13 @@ public sealed class HostService : BackgroundService
     private string _activeMonitorId = "primary";
     private SessionManager.SessionLease? _sessionLease;
     private Guid _hostId;
+    private HostConfig? _config;
+    private CancellationTokenSource? _frameLoopCts;
+    private Task? _frameLoopTask;
+    private bool _authenticated;
+    private bool _controlChannelReady;
+    private bool _frameChannelReady;
+    private DateTimeOffset _lastWebRtcRestart = DateTimeOffset.MinValue;
 
     public HostService(
         HostConfigProvider configProvider,
@@ -38,6 +48,9 @@ public sealed class HostService : BackgroundService
         WebSocketSignalingClient signalingClient,
         SessionManager sessionManager,
         MonitorService monitorService,
+        CaptureService captureService,
+        InputService inputService,
+        WebRtcService webRtcService,
         ILogger<HostService> logger)
     {
         _configProvider = configProvider;
@@ -47,22 +60,54 @@ public sealed class HostService : BackgroundService
         _signalingClient = signalingClient;
         _sessionManager = sessionManager;
         _monitorService = monitorService;
+        _captureService = captureService;
+        _inputService = inputService;
+        _webRtcService = webRtcService;
         _logger = logger;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("Host service booting...");
-        var config = await _configProvider.GetAsync(stoppingToken).ConfigureAwait(false);
-        _hostId = config.HostId;
+        _config = await _configProvider.GetAsync(stoppingToken).ConfigureAwait(false);
+        _hostId = _config.HostId;
         _monitors = _monitorService.Enumerate();
         _activeMonitorId = _monitors.FirstOrDefault()?.Id ?? _activeMonitorId;
-        _logger.LogInformation("Host ID: {HostId}; resolver: {Resolver}", config.HostId, config.SignalingResolverUrl);
+        _logger.LogInformation("Host ID: {HostId}; resolver: {Resolver}", _config.HostId, _config.SignalingResolverUrl);
 
         _signalingClient.SetMessageHandler(OnSignalingMessageAsync);
         _signalingClient.Disconnected += OnSignalingDisconnected;
 
-        await InitializeNetworkingAsync(config, stoppingToken).ConfigureAwait(false);
+        _webRtcService.OfferReady += offer => SendAsync(offer, stoppingToken);
+        _webRtcService.IceCandidateReady += candidate => SendAsync(candidate, stoppingToken);
+        _webRtcService.IceStateChanged += state => HandleIceStateChangedAsync(state, stoppingToken);
+        _webRtcService.ControlChannelOpened += () =>
+        {
+            _controlChannelReady = true;
+            _logger.LogInformation("Control data channel ready; switching to data-channel delivery when possible");
+            return Task.CompletedTask;
+        };
+        _webRtcService.ControlChannelClosed += () =>
+        {
+            _controlChannelReady = false;
+            _logger.LogInformation("Control data channel closed; falling back to signaling transport");
+            return Task.CompletedTask;
+        };
+        _webRtcService.FrameChannelOpened += () =>
+        {
+            _frameChannelReady = true;
+            _logger.LogInformation("Frame data channel ready; streaming frames over WebRTC");
+            return Task.CompletedTask;
+        };
+        _webRtcService.FrameChannelClosed += () =>
+        {
+            _frameChannelReady = false;
+            _logger.LogInformation("Frame data channel closed; falling back to control/signaling for frames");
+            return Task.CompletedTask;
+        };
+        _webRtcService.ControlMessageReceived += message => OnSignalingMessageAsync(message, stoppingToken);
+
+        await InitializeNetworkingAsync(_config, stoppingToken).ConfigureAwait(false);
         await InitializeCaptureAsync(stoppingToken).ConfigureAwait(false);
 
         while (!stoppingToken.IsCancellationRequested)
@@ -122,6 +167,8 @@ public sealed class HostService : BackgroundService
         {
             await _lockoutManager.RegisterSuccessAsync(cancellationToken).ConfigureAwait(false);
             _logger.LogInformation("Authentication succeeded for host {HostId}", configSnapshot.HostId);
+            _authenticated = true;
+            EnsureFrameLoop();
             return new AuthResult("ok", null);
         }
 
@@ -160,7 +207,7 @@ public sealed class HostService : BackgroundService
                         ? passwordElement.GetString() ?? string.Empty
                         : string.Empty;
                     var result = await HandleAuthenticationAsync(password, cancellationToken).ConfigureAwait(false);
-                    await SendAsync(result, cancellationToken).ConfigureAwait(false);
+                    await SendControlAsync(result, cancellationToken).ConfigureAwait(false);
                     break;
                 }
             case MessageTypes.MonitorSwitch:
@@ -171,10 +218,45 @@ public sealed class HostService : BackgroundService
                     await HandleMonitorSwitchAsync(id, cancellationToken).ConfigureAwait(false);
                     break;
                 }
+            case MessageTypes.Input:
+                {
+                    var input = JsonSerializer.Deserialize<InputMessage>(payload, _serializerOptions);
+                    if (!_authenticated)
+                    {
+                        _logger.LogWarning("Ignoring input while unauthenticated");
+                        break;
+                    }
+
+                    if (input is not null)
+                    {
+                        await _inputService.HandleAsync(input, _activeMonitorId, cancellationToken).ConfigureAwait(false);
+                    }
+                    break;
+                }
             case SignalingMessageTypes.MonitorListRequest:
             case MessageTypes.MonitorList:
                 await SendMonitorListAsync(cancellationToken).ConfigureAwait(false);
                 break;
+            case SignalingMessageTypes.SdpAnswer:
+                {
+                    var answer = JsonSerializer.Deserialize<SdpAnswer>(payload, _serializerOptions);
+                    if (answer is not null)
+                    {
+                        await _webRtcService.AcceptAnswerAsync(answer).ConfigureAwait(false);
+                    }
+
+                    break;
+                }
+            case SignalingMessageTypes.IceCandidate:
+                {
+                    var candidate = JsonSerializer.Deserialize<IceCandidate>(payload, _serializerOptions);
+                    if (candidate is not null)
+                    {
+                        await _webRtcService.AddRemoteCandidateAsync(candidate).ConfigureAwait(false);
+                    }
+
+                    break;
+                }
             default:
                 _logger.LogDebug("Unhandled signaling message type {Type}", type);
                 break;
@@ -191,20 +273,26 @@ public sealed class HostService : BackgroundService
 
         if (_sessionLease is not null && _sessionLease.Value.SessionId != sessionId)
         {
-            await SendAsync(new HostBusy("busy"), cancellationToken).ConfigureAwait(false);
+            await SendControlAsync(new HostBusy("busy"), cancellationToken).ConfigureAwait(false);
             return;
         }
 
         var lease = _sessionLease ?? await _sessionManager.TryBeginAsync(sessionId, cancellationToken).ConfigureAwait(false);
         if (lease is null)
         {
-            await SendAsync(new HostBusy("busy"), cancellationToken).ConfigureAwait(false);
+            await SendControlAsync(new HostBusy("busy"), cancellationToken).ConfigureAwait(false);
             return;
         }
 
         _sessionLease = lease;
+        _authenticated = false;
+        StopFrameLoop();
         await SendHostHelloAsync(cancellationToken).ConfigureAwait(false);
         await SendMonitorListAsync(cancellationToken).ConfigureAwait(false);
+        if (_config is not null)
+        {
+            await _webRtcService.StartOfferAsync(_config.StunServers, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task HandleMonitorSwitchAsync(string monitorId, CancellationToken cancellationToken)
@@ -216,13 +304,13 @@ public sealed class HostService : BackgroundService
         }
 
         _activeMonitorId = monitorId;
-        await SendAsync(new MonitorSwitchResult(_activeMonitorId), cancellationToken).ConfigureAwait(false);
+        await SendControlAsync(new MonitorSwitchResult(_activeMonitorId), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendMonitorListAsync(CancellationToken cancellationToken)
     {
         var message = new MonitorList(_monitors, _activeMonitorId);
-        await SendAsync(message, cancellationToken).ConfigureAwait(false);
+        await SendControlAsync(message, cancellationToken).ConfigureAwait(false);
     }
 
     private async Task SendHostHelloAsync(CancellationToken cancellationToken)
@@ -233,13 +321,50 @@ public sealed class HostService : BackgroundService
         }
 
         var hello = new HostHello(_hostId, _monitors, _activeMonitorId);
-        await SendAsync(hello, cancellationToken).ConfigureAwait(false);
+        await SendControlAsync(hello, cancellationToken).ConfigureAwait(false);
     }
 
     private Task SendAsync<T>(T message, CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.Serialize(message, _serializerOptions);
         return _signalingClient.SendTextAsync(payload, cancellationToken);
+    }
+
+    private async Task SendControlAsync(IDataChannelMessage message, CancellationToken cancellationToken)
+    {
+        if (_controlChannelReady && await _webRtcService.TrySendControlMessageAsync(message, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await SendAsync(message, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task HandleIceStateChangedAsync(string state, CancellationToken cancellationToken)
+    {
+        await SendAsync(new IceState(state), cancellationToken).ConfigureAwait(false);
+
+        if (!(_config is HostConfig config) || _sessionLease is null)
+        {
+            return;
+        }
+
+        if (!state.Equals("failed", StringComparison.OrdinalIgnoreCase) &&
+            !state.Equals("disconnected", StringComparison.OrdinalIgnoreCase) &&
+            !state.Equals("closed", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (now - _lastWebRtcRestart < TimeSpan.FromSeconds(5))
+        {
+            return;
+        }
+
+        _lastWebRtcRestart = now;
+        _logger.LogInformation("WebRTC state {State}; re-offering to recover", state);
+        await _webRtcService.StartOfferAsync(config.StunServers, cancellationToken).ConfigureAwait(false);
     }
 
     private void OnSignalingDisconnected()
@@ -250,5 +375,66 @@ public sealed class HostService : BackgroundService
         }
 
         _sessionLease = null;
+        _authenticated = false;
+        _controlChannelReady = false;
+        _frameChannelReady = false;
+        StopFrameLoop();
+        _ = _webRtcService.ResetAsync();
+    }
+
+    private void EnsureFrameLoop()
+    {
+        if (_frameLoopTask is not null && !_frameLoopTask.IsCompleted)
+        {
+            return;
+        }
+
+        _frameLoopCts = new CancellationTokenSource();
+        var token = _frameLoopCts.Token;
+        _frameLoopTask = Task.Run(async () =>
+        {
+            _logger.LogInformation("Starting frame loop for monitor {MonitorId}", _activeMonitorId);
+            try
+            {
+                while (!token.IsCancellationRequested && _sessionLease is not null && _authenticated)
+                {
+                    var frame = _captureService.Capture(_activeMonitorId);
+                    var sentOverVideoTrack = _webRtcService.HasVideoTrack &&
+                        await _webRtcService.TrySendVideoFrameAsync(frame, token).ConfigureAwait(false);
+
+                    var sentOverRtc = !sentOverVideoTrack && _frameChannelReady && await _webRtcService.TrySendFrameAsync(
+                        new FrameBinaryHeader(frame.Width, frame.Height, frame.Format),
+                        frame.PngData,
+                        token).ConfigureAwait(false);
+
+                    if (!sentOverRtc && !sentOverVideoTrack)
+                    {
+                        var payload = new FrameChunk(frame.Width, frame.Height, frame.Format, Convert.ToBase64String(frame.PngData));
+                        await SendControlAsync(payload, token).ConfigureAwait(false);
+                    }
+
+                    await Task.Delay(TimeSpan.FromMilliseconds(500), token).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected when shutting down the loop.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Frame loop faulted");
+            }
+            finally
+            {
+                _logger.LogInformation("Frame loop stopped");
+            }
+        }, token);
+    }
+
+    private void StopFrameLoop()
+    {
+        _frameLoopCts?.Cancel();
+        _frameLoopCts = null;
+        _frameLoopTask = null;
     }
 }

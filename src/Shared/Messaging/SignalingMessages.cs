@@ -9,6 +9,9 @@ public static class SignalingMessageTypes
     public const string HostHello = "host_hello";
     public const string MonitorListRequest = "monitor_list_request";
     public const string MonitorSwitchResult = "monitor_switch_result";
+    public const string SdpOffer = "sdp_offer";
+    public const string SdpAnswer = "sdp_answer";
+    public const string IceCandidate = "ice_candidate";
 }
 
 public sealed record OperatorHello(
@@ -43,4 +46,32 @@ public sealed record MonitorSwitchResult(
 {
     [JsonPropertyName("type")]
     public string Type => SignalingMessageTypes.MonitorSwitchResult;
+}
+
+public sealed record SdpOffer(
+    [property: JsonPropertyName("sdp")] string Sdp,
+    [property: JsonPropertyName("sdp_type")] string SdpType
+) : IDataChannelMessage
+{
+    [JsonPropertyName("type")]
+    public string Type => SignalingMessageTypes.SdpOffer;
+}
+
+public sealed record SdpAnswer(
+    [property: JsonPropertyName("sdp")] string Sdp,
+    [property: JsonPropertyName("sdp_type")] string SdpType
+) : IDataChannelMessage
+{
+    [JsonPropertyName("type")]
+    public string Type => SignalingMessageTypes.SdpAnswer;
+}
+
+public sealed record IceCandidate(
+    [property: JsonPropertyName("candidate")] string Candidate,
+    [property: JsonPropertyName("sdp_mid")] string? SdpMid,
+    [property: JsonPropertyName("sdp_mline_index")] int? SdpMLineIndex
+) : IDataChannelMessage
+{
+    [JsonPropertyName("type")]
+    public string Type => SignalingMessageTypes.IceCandidate;
 }

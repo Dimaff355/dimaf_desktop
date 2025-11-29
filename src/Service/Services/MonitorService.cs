@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Shared.Models;
+using System.Drawing;
+using System.Windows.Forms;
 
 namespace RemoteDesktop.Service.Services;
 
@@ -12,17 +14,50 @@ public sealed class MonitorService
         _logger = logger;
     }
 
+    private IReadOnlyList<MonitorDescriptor> _monitors = Array.Empty<MonitorDescriptor>();
+
     public IReadOnlyList<MonitorDescriptor> Enumerate()
     {
-        // Windows-specific enumeration (DXGI / WMI) is planned. For now we expose a
-        // deterministic stub that keeps the rest of the pipeline working end-to-end
-        // on any platform, including CI containers.
-        var descriptors = new List<MonitorDescriptor>
+        var screens = Screen.AllScreens;
+        if (screens.Length == 0)
         {
-            new("primary", "Primary", 1920, 1080, 1.0)
-        };
+            _monitors = new[] { new MonitorDescriptor("primary", "Primary", 1920, 1080, 1.0) };
+            return _monitors;
+        }
 
-        _logger.LogInformation("Enumerated {Count} monitor(s)", descriptors.Count);
-        return descriptors;
+        _monitors = screens
+            .Select((s, i) => new MonitorDescriptor(
+                id: s.DeviceName,
+                name: s.DeviceName.Trim('\0'),
+                width: s.Bounds.Width,
+                height: s.Bounds.Height,
+                scale: 1.0))
+            .ToArray();
+
+        _logger.LogInformation("Enumerated {Count} monitor(s)", _monitors.Count);
+        return _monitors;
+    }
+
+    public string GetPrimaryMonitorId()
+    {
+        if (_monitors.Count == 0)
+        {
+            _ = Enumerate();
+        }
+
+        return _monitors.FirstOrDefault()?.Id ?? "primary";
+    }
+
+    public Rectangle? GetBounds(string? monitorId)
+    {
+        if (_monitors.Count == 0)
+        {
+            _ = Enumerate();
+        }
+
+        var screen = Screen.AllScreens.FirstOrDefault(s => s.DeviceName.Equals(monitorId, StringComparison.OrdinalIgnoreCase))
+            ?? Screen.PrimaryScreen;
+
+        return screen?.Bounds;
     }
 }
