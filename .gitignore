@@ -1,0 +1,15 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+*.nupkg
+*.snupkg
+
+# IDE
+.vs/
+*.user
+*.suo
+
+# Local data
+frames/
+*.local.settings.json
