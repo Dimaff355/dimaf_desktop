@@ -1,0 +1,62 @@
+<Window x:Class="Configurator.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="P2P Remote Desktop Configurator" Height="520" Width="520">
+    <Grid Margin="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <GroupBox Header="Host status" Grid.Row="0" Padding="8">
+            <StackPanel>
+                <TextBlock Text="Host ID:" FontWeight="Bold"/>
+                <TextBlock x:Name="HostIdText" Text="(unknown)" Margin="0,2,0,8"/>
+                <TextBlock Text="Password configured:" FontWeight="Bold"/>
+                <TextBlock x:Name="PasswordStatusText" Text="(unknown)" Margin="0,2,0,8"/>
+                <TextBlock Text="Resolver URL:" FontWeight="Bold"/>
+                <TextBlock x:Name="ResolverText" Text="(unknown)"/>
+                <Button Content="Refresh status" Width="140" Margin="0,10,0,0" Click="OnRefreshStatus"/>
+            </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="Update password" Grid.Row="1" Padding="8" Margin="0,8,0,0">
+            <StackPanel>
+                <PasswordBox x:Name="PasswordBox" Width="200"/>
+                <Button Content="Save password" Width="140" Margin="0,10,0,0" Click="OnSavePassword"/>
+            </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="Update resolver" Grid.Row="2" Padding="8" Margin="0,8,0,0">
+            <StackPanel>
+                <TextBox x:Name="ResolverBox" Width="320"/>
+                <Button Content="Save resolver" Width="140" Margin="0,10,0,0" Click="OnSaveResolver"/>
+            </StackPanel>
+        </GroupBox>
+
+        <GroupBox Header="ICE (STUN/TURN)" Grid.Row="3" Padding="8" Margin="0,8,0,0">
+            <StackPanel>
+                <TextBlock Text="STUN servers (one per line)" FontWeight="Bold"/>
+                <TextBox x:Name="StunBox" Width="320" Height="80" AcceptsReturn="True" TextWrapping="Wrap"/>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <StackPanel Width="240">
+                        <TextBlock Text="TURN URL" FontWeight="Bold"/>
+                        <TextBox x:Name="TurnUrlBox" Width="220"/>
+                    </StackPanel>
+                    <StackPanel Width="240">
+                        <TextBlock Text="TURN username" FontWeight="Bold"/>
+                        <TextBox x:Name="TurnUsernameBox" Width="220"/>
+                    </StackPanel>
+                </StackPanel>
+                <TextBlock Text="TURN credential" FontWeight="Bold" Margin="0,8,0,0"/>
+                <PasswordBox x:Name="TurnCredentialBox" Width="220"/>
+                <Button Content="Save ICE" Width="140" Margin="0,10,0,0" Click="OnSaveIce"/>
+            </StackPanel>
+        </GroupBox>
+
+        <TextBlock x:Name="StatusText" Grid.Row="4" Margin="0,8,0,0" TextWrapping="Wrap"/>
+    </Grid>
+</Window>
