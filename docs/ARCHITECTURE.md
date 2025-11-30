@@ -96,7 +96,7 @@ For the current prototype, DXGI Desktop Duplication is preferred; when available
 
 ## Installation and Deployment Notes
 
-- The installer must generate the host ID once and set ACLs on config/log directories.
+- The installer must generate the host ID once and set ACLs on config/log directories. The service now hardens both paths at runtime to restrict access to SYSTEM/Administrators on Windows.
 - Service must start automatically and restart on failure; recovery actions configured in SCM.
 - GUI installer registers the configurator for all users but pipes changes to the service running as SYSTEM.
 - Ngrok/tunnel configuration for the signaling server should include TLS termination and rate-limit middleware where available.

@@ -23,6 +23,7 @@ if (OperatingSystem.IsWindows())
 
 var logDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "P2PRD", "logs");
 Directory.CreateDirectory(logDirectory);
+AclHelper.HardenDirectory(logDirectory);
 
 Log.Logger = new LoggerConfiguration()
     .Enrich.FromLogContext()
