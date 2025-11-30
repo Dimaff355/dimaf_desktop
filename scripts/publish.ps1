@@ -42,6 +42,7 @@ function Publish-Project {
 
 Publish-Project -Project "$repoRoot/src/Service/P2PRD.Service.csproj" -Name "Service"
 Publish-Project -Project "$repoRoot/src/OperatorConsole/OperatorConsole.csproj" -Name "OperatorConsole"
+Publish-Project -Project "$repoRoot/src/Configurator/Configurator.csproj" -Name "Configurator"
 
 if (-not $SkipSignalingServer) {
     Publish-Project -Project "$repoRoot/src/SignalingServer/SignalingServer.csproj" -Name "SignalingServer"

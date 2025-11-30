@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Shared.Config;
 
@@ -47,6 +49,7 @@ public sealed class HostConfigProvider
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
+            HardenPath(Path.GetDirectoryName(_configPath)!);
             await using var stream = File.Create(_configPath);
             await JsonSerializer.SerializeAsync(stream, config, _options, cancellationToken).ConfigureAwait(false);
             _cached = config;
@@ -86,5 +89,33 @@ public sealed class HostConfigProvider
     {
         var programData = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         return Path.Combine(programData, "P2PRD", "config.json");
+    }
+
+    private void HardenPath(string directory)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        try
+        {
+            var info = new DirectoryInfo(directory);
+            var security = info.GetAccessControl();
+
+            var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            var adminsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+
+            var fullControl = FileSystemRights.FullControl;
+            security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            security.ResetAccessRule(new FileSystemAccessRule(systemSid, fullControl, AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(adminsSid, fullControl, AccessControlType.Allow));
+
+            info.SetAccessControl(security);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to harden config directory permissions");
+        }
     }
 }

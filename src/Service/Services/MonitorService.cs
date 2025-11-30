@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using RemoteDesktop.Shared.Models;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 
 namespace RemoteDesktop.Service.Services;
@@ -31,7 +32,7 @@ public sealed class MonitorService
                 name: s.DeviceName.Trim('\0'),
                 width: s.Bounds.Width,
                 height: s.Bounds.Height,
-                scale: 1.0))
+                scale: GetDpiScale(s)))
             .ToArray();
 
         _logger.LogInformation("Enumerated {Count} monitor(s)", _monitors.Count);
@@ -60,4 +61,69 @@ public sealed class MonitorService
 
         return screen?.Bounds;
     }
+
+    public MonitorDescriptor? GetDescriptor(string? monitorId)
+    {
+        if (_monitors.Count == 0)
+        {
+            _ = Enumerate();
+        }
+
+        return _monitors.FirstOrDefault(m => m.Id.Equals(monitorId, StringComparison.OrdinalIgnoreCase))
+            ?? _monitors.FirstOrDefault();
+    }
+
+    private double GetDpiScale(Screen screen)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return 1.0;
+        }
+
+        try
+        {
+            var point = new POINT { X = screen.Bounds.Left + 1, Y = screen.Bounds.Top + 1 };
+            var monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+            if (monitor != IntPtr.Zero)
+            {
+                var hr = GetDpiForMonitor(monitor, MonitorDpiType.EffectiveDpi, out uint dpiX, out uint dpiY);
+                if (hr == 0 && dpiX > 0)
+                {
+                    return dpiX / 96.0;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Failed to query DPI for monitor {Monitor}", screen.DeviceName);
+        }
+
+        return 1.0;
+    }
+
+    #region Win32 DPI
+
+    private const int MONITOR_DEFAULTTONEAREST = 0x00000002;
+
+    private enum MonitorDpiType
+    {
+        EffectiveDpi = 0,
+        AngularDpi = 1,
+        RawDpi = 2
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("User32.dll")]
+    private static extern IntPtr MonitorFromPoint(POINT pt, int dwFlags);
+
+    [DllImport("Shcore.dll")]
+    private static extern int GetDpiForMonitor(IntPtr hmonitor, MonitorDpiType dpiType, out uint dpiX, out uint dpiY);
+
+    #endregion
 }

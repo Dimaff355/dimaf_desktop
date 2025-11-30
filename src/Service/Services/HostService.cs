@@ -39,6 +39,12 @@ public sealed class HostService : BackgroundService
     private bool _controlChannelReady;
     private bool _frameChannelReady;
     private DateTimeOffset _lastWebRtcRestart = DateTimeOffset.MinValue;
+    private Uri? _currentSignalingEndpoint;
+    private bool _signalingConnected;
+    private readonly SemaphoreSlim _connectLock = new(1, 1);
+    private readonly TimeSpan _resolverPollInterval = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _resolverMaxBackoff = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan _resolverInitialBackoff = TimeSpan.FromSeconds(5);
 
     public HostService(
         HostConfigProvider configProvider,
@@ -110,10 +116,18 @@ public sealed class HostService : BackgroundService
         await InitializeNetworkingAsync(_config, stoppingToken).ConfigureAwait(false);
         await InitializeCaptureAsync(stoppingToken).ConfigureAwait(false);
 
-        while (!stoppingToken.IsCancellationRequested)
+        var resolverLoop = RunResolverLoopAsync(stoppingToken);
+
+        try
         {
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken).ConfigureAwait(false);
+            await Task.Delay(Timeout.Infinite, stoppingToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException)
+        {
+            // Expected when shutting down the host.
+        }
+
+        await resolverLoop.ConfigureAwait(false);
     }
 
     private async Task InitializeNetworkingAsync(HostConfig config, CancellationToken cancellationToken)
@@ -126,20 +140,80 @@ public sealed class HostService : BackgroundService
             resolved = fallback;
         }
 
+        _currentSignalingEndpoint = resolved;
+
         if (resolved is null)
         {
             _logger.LogWarning("No signaling endpoint available; service will keep retrying on next resolver poll");
             return;
         }
 
-        try
+        await TryConnectAsync(resolved, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task RunResolverLoopAsync(CancellationToken cancellationToken)
+    {
+        var backoff = _resolverInitialBackoff;
+
+        while (!cancellationToken.IsCancellationRequested)
         {
-            await _signalingClient.ConnectAsync(resolved, cancellationToken).ConfigureAwait(false);
-            await SendHostHelloAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or System.Net.WebSockets.WebSocketException)
-        {
-            _logger.LogWarning(ex, "Failed to connect to signaling server {Endpoint}", resolved);
+            try
+            {
+                if (_config is not HostConfig config)
+                {
+                    _logger.LogWarning("Skipping resolver poll because config is unavailable");
+                    await Task.Delay(_resolverPollInterval, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                var resolved = await _signalingResolver.ResolveAsync(config.SignalingResolverUrl, cancellationToken).ConfigureAwait(false);
+                if (resolved is null && Uri.TryCreate(config.SignalingResolverUrl, UriKind.Absolute, out var fallback))
+                {
+                    resolved = fallback;
+                }
+
+                if (resolved is not null)
+                {
+                    var changed = _currentSignalingEndpoint is null || _currentSignalingEndpoint != resolved;
+                    _currentSignalingEndpoint = resolved;
+                    backoff = _resolverInitialBackoff;
+
+                    if (!_signalingConnected || changed)
+                    {
+                        await TryConnectAsync(resolved, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                else
+                {
+                    _logger.LogWarning("Resolver did not return a usable endpoint; backing off");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Resolver loop iteration failed");
+            }
+
+            var delay = _currentSignalingEndpoint is null
+                ? TimeSpan.FromMilliseconds(Math.Min(backoff.TotalMilliseconds, _resolverMaxBackoff.TotalMilliseconds))
+                : _resolverPollInterval;
+
+            if (_currentSignalingEndpoint is null)
+            {
+                backoff = TimeSpan.FromMilliseconds(Math.Min(backoff.TotalMilliseconds * 2, _resolverMaxBackoff.TotalMilliseconds));
+            }
+
+            try
+            {
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
         }
     }
 
@@ -291,7 +365,7 @@ public sealed class HostService : BackgroundService
         await SendMonitorListAsync(cancellationToken).ConfigureAwait(false);
         if (_config is not null)
         {
-            await _webRtcService.StartOfferAsync(_config.StunServers, cancellationToken).ConfigureAwait(false);
+            await _webRtcService.StartOfferAsync(_config.StunServers, _config.Turn, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -364,7 +438,7 @@ public sealed class HostService : BackgroundService
 
         _lastWebRtcRestart = now;
         _logger.LogInformation("WebRTC state {State}; re-offering to recover", state);
-        await _webRtcService.StartOfferAsync(config.StunServers, cancellationToken).ConfigureAwait(false);
+        await _webRtcService.StartOfferAsync(config.StunServers, config.Turn, cancellationToken).ConfigureAwait(false);
     }
 
     private void OnSignalingDisconnected()
@@ -380,6 +454,49 @@ public sealed class HostService : BackgroundService
         _frameChannelReady = false;
         StopFrameLoop();
         _ = _webRtcService.ResetAsync();
+        _signalingConnected = false;
+
+        if (_currentSignalingEndpoint is Uri endpoint)
+        {
+            _ = TryReconnectAsync(endpoint);
+        }
+    }
+
+    private async Task TryReconnectAsync(Uri endpoint)
+    {
+        try
+        {
+            await TryConnectAsync(endpoint, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.Net.WebSockets.WebSocketException)
+        {
+            _logger.LogWarning(ex, "Failed to reconnect to signaling server {Endpoint}", endpoint);
+        }
+    }
+
+    private async Task TryConnectAsync(Uri endpoint, CancellationToken cancellationToken)
+    {
+        if (endpoint is null)
+        {
+            return;
+        }
+
+        await _connectLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_signalingConnected && _currentSignalingEndpoint == endpoint)
+            {
+                return;
+            }
+
+            await _signalingClient.ConnectAsync(endpoint, cancellationToken).ConfigureAwait(false);
+            _signalingConnected = true;
+            await SendHostHelloAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _connectLock.Release();
+        }
     }
 
     private void EnsureFrameLoop()

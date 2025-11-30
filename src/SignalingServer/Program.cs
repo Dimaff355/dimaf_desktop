@@ -10,6 +10,7 @@ var app = builder.Build();
 
 app.UseWebSockets();
 
+var rateLimiter = new SlidingRateLimiter(maxRequestsPerWindow: 10, window: TimeSpan.FromSeconds(1));
 var hosts = new ConcurrentDictionary<Guid, WebSocketConnection>();
 var operators = new ConcurrentDictionary<Guid, ConcurrentBag<WebSocketConnection>>();
 
@@ -20,6 +21,14 @@ app.Map("/ws", async context =>
     if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    if (!rateLimiter.Allow(remoteIp))
+    {
+        context.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.Response.WriteAsync("rate limit");
         return;
     }
 
@@ -202,5 +211,49 @@ internal sealed class WebSocketConnection
         }
 
         return Task.CompletedTask;
+    }
+}
+
+internal sealed class SlidingRateLimiter
+{
+    private readonly ConcurrentDictionary<string, Counter> _counters = new();
+    private readonly int _maxRequestsPerWindow;
+    private readonly TimeSpan _window;
+
+    public SlidingRateLimiter(int maxRequestsPerWindow, TimeSpan window)
+    {
+        _maxRequestsPerWindow = maxRequestsPerWindow;
+        _window = window;
+    }
+
+    public bool Allow(string key)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var counter = _counters.GetOrAdd(key, _ => new Counter(now, 0));
+
+        lock (counter)
+        {
+            if (now - counter.WindowStart >= _window)
+            {
+                counter.WindowStart = now;
+                counter.Count = 0;
+            }
+
+            counter.Count++;
+            return counter.Count <= _maxRequestsPerWindow;
+        }
+    }
+
+    private sealed class Counter
+    {
+        public Counter(DateTimeOffset windowStart, int count)
+        {
+            WindowStart = windowStart;
+            Count = count;
+        }
+
+        public DateTimeOffset WindowStart { get; set; }
+
+        public int Count { get; set; }
     }
 }

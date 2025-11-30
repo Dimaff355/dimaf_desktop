@@ -3,6 +3,9 @@ using System.Text;
 using System.Text.Json;
 using OperatorConsole;
 using RemoteDesktop.Shared.Messaging;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.PixelFormats;
+using SIPSorceryMedia.Abstractions.V1;
 
 if (args.Length < 2)
 {
@@ -34,7 +37,8 @@ webRtc = new WebRtcOperator(
     stun,
     message => SendAsync(client, message, serializerOptions),
     json => ProcessEnvelopeAsync(json, client, sessionId, password, webRtc!, serializerOptions, true),
-    (header, payload) => SaveBinaryFrameAsync(header, payload));
+    (header, payload) => SaveBinaryFrameAsync(header, payload),
+    frame => SaveVideoFrameAsync(frame));
 await using var webRtcDisposable = webRtc;
 {
     await client.ConnectAsync(new UriBuilder(endpoint) { Query = $"role=operator&hostId={hostId}" }.Uri, CancellationToken.None);
@@ -44,7 +48,7 @@ await using var webRtcDisposable = webRtc;
     var receiveTask = ReceiveLoopAsync(client, sessionId, password, webRtc, serializerOptions, cts.Token);
     var commandTask = CommandLoopAsync(client, webRtc, serializerOptions, cts.Token);
 
-    Console.WriteLine("Commands: monitor_switch <id>, mouse <x 0..1> <y 0..1>, click <left|right|middle>, wheel <delta>, key <scanCode> <down|up>");
+Console.WriteLine("Commands: monitor_switch <id>, mouse <x 0..1> <y 0..1>, click <left|right|middle>, wheel <delta>, key <scanCode> <down|up>, cad");
     Console.WriteLine("Press Ctrl+C to exit.");
 
     await Task.WhenAny(receiveTask, commandTask);
@@ -115,6 +119,9 @@ static async Task CommandLoopAsync(ClientWebSocket socket, WebRtcOperator webRtc
             case "key" when parts.Length >= 3 && int.TryParse(parts[1], out var scanCode):
                 var isDown = parts[2].Equals("down", StringComparison.OrdinalIgnoreCase);
                 await SendControlAsync(socket, webRtc, new InputMessage(null, new KeyboardPayload(scanCode, isDown)), serializerOptions);
+                break;
+            case "cad":
+                await SendControlAsync(socket, webRtc, new InputMessage(null, null, new SpecialPayload("ctrl_alt_del")), serializerOptions);
                 break;
             default:
                 Console.WriteLine("Unknown command");
@@ -245,6 +252,23 @@ static async Task SaveBinaryFrameAsync(FrameBinaryHeader header, byte[] payload)
     await File.WriteAllBytesAsync(path, payload);
 
     Console.WriteLine($"Saved frame over WebRTC to {path} ({header.Width}x{header.Height})");
+}
+
+static async Task SaveVideoFrameAsync(RawImage frame)
+{
+    if (frame.PixelFormat != VideoPixelFormatsEnum.Bgra || frame.Width == 0 || frame.Height == 0)
+    {
+        return;
+    }
+
+    var directory = Path.Combine(Environment.CurrentDirectory, "frames", "video");
+    Directory.CreateDirectory(directory);
+
+    var path = Path.Combine(directory, $"frame-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}-vp8.png");
+    using var image = Image.LoadPixelData<Bgra32>(frame.Data, frame.Width, frame.Height);
+    await image.SaveAsPngAsync(path);
+
+    Console.WriteLine($"Saved VP8 track frame to {path} ({frame.Width}x{frame.Height})");
 }
 
 static Task SendAsync<T>(ClientWebSocket socket, T message, JsonSerializerOptions serializerOptions)

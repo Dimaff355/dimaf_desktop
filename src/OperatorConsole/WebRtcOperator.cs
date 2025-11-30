@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using RemoteDesktop.Shared.Messaging;
 using SIPSorcery.Net;
+using SIPSorceryMedia.Abstractions.V1;
 
 namespace OperatorConsole;
 
@@ -10,6 +11,7 @@ internal sealed class WebRtcOperator : IAsyncDisposable
     private readonly Func<IDataChannelMessage, Task> _sendAsync;
     private readonly Func<string, Task> _onControlMessage;
     private readonly Func<FrameBinaryHeader, byte[], Task> _onFrameMessage;
+    private readonly Func<RawImage, Task>? _onVideoFrame;
     private RTCPeerConnection? _peerConnection;
     private RTCDataChannel? _controlChannel;
     private RTCDataChannel? _frameChannel;
@@ -18,12 +20,14 @@ internal sealed class WebRtcOperator : IAsyncDisposable
         IReadOnlyList<string> stunServers,
         Func<IDataChannelMessage, Task> sendAsync,
         Func<string, Task> onControlMessage,
-        Func<FrameBinaryHeader, byte[], Task> onFrameMessage)
+        Func<FrameBinaryHeader, byte[], Task> onFrameMessage,
+        Func<RawImage, Task>? onVideoFrame = null)
     {
         _stunServers = stunServers;
         _sendAsync = sendAsync;
         _onControlMessage = onControlMessage;
         _onFrameMessage = onFrameMessage;
+        _onVideoFrame = onVideoFrame;
     }
 
     public async Task HandleOfferAsync(SdpOffer offer)
@@ -52,6 +56,15 @@ internal sealed class WebRtcOperator : IAsyncDisposable
         };
 
         _peerConnection.ondatachannel += channel => SetupDataChannel(channel);
+        _peerConnection.OnVideoFrameReceived += (_, frame) =>
+        {
+            if (_onVideoFrame is null)
+            {
+                return Task.CompletedTask;
+            }
+
+            return _onVideoFrame(frame);
+        };
 
         SetupDataChannel(_peerConnection.createDataChannel("control", null));
         SetupDataChannel(_peerConnection.createDataChannel("frames", null));

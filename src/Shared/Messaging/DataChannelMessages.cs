@@ -56,7 +56,8 @@ public sealed record MonitorSwitch(
 
 public sealed record InputMessage(
     [property: JsonPropertyName("mouse")] MousePayload? Mouse,
-    [property: JsonPropertyName("keyboard")] KeyboardPayload? Keyboard
+    [property: JsonPropertyName("keyboard")] KeyboardPayload? Keyboard,
+    [property: JsonPropertyName("special")] SpecialPayload? Special = null
 ) : IDataChannelMessage
 {
     [JsonPropertyName("type")]
@@ -112,4 +113,8 @@ public sealed record MouseButtons(
 public sealed record KeyboardPayload(
     [property: JsonPropertyName("scan_code")] int ScanCode,
     [property: JsonPropertyName("is_key_down")] bool IsKeyDown
+);
+
+public sealed record SpecialPayload(
+    [property: JsonPropertyName("action")] string Action
 );

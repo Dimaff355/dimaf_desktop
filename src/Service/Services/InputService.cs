@@ -11,11 +11,13 @@ namespace RemoteDesktop.Service.Services;
 public sealed class InputService
 {
     private readonly MonitorService _monitorService;
+    private readonly InputDesktopSwitcher _desktopSwitcher;
     private readonly ILogger<InputService> _logger;
 
-    public InputService(MonitorService monitorService, ILogger<InputService> logger)
+    public InputService(MonitorService monitorService, InputDesktopSwitcher desktopSwitcher, ILogger<InputService> logger)
     {
         _monitorService = monitorService;
+        _desktopSwitcher = desktopSwitcher;
         _logger = logger;
     }
 
@@ -27,6 +29,8 @@ public sealed class InputService
             return Task.CompletedTask;
         }
 
+        using var desktopScope = _desktopSwitcher.TryEnterInputDesktop();
+
         var bounds = _monitorService.GetBounds(activeMonitorId);
         if (bounds is null)
         {
@@ -34,9 +38,12 @@ public sealed class InputService
             return Task.CompletedTask;
         }
 
+        var descriptor = _monitorService.GetDescriptor(activeMonitorId);
+        var scale = descriptor?.DpiScale ?? 1.0;
+
         if (message.Mouse is MousePayload mouse)
         {
-            HandleMouse(mouse, bounds.Value);
+            HandleMouse(mouse, bounds.Value, scale);
         }
 
         if (message.Keyboard is KeyboardPayload keyboard)
@@ -44,15 +51,25 @@ public sealed class InputService
             HandleKeyboard(keyboard);
         }
 
+        if (message.Special is SpecialPayload special)
+        {
+            HandleSpecial(special);
+        }
+
         return Task.CompletedTask;
     }
 
-    private void HandleMouse(MousePayload mouse, System.Drawing.Rectangle bounds)
+    private void HandleMouse(MousePayload mouse, System.Drawing.Rectangle bounds, double scale)
     {
         if (mouse.X.HasValue && mouse.Y.HasValue)
         {
-            var x = ClampToRange(mouse.X.Value) * bounds.Width + bounds.Left;
-            var y = ClampToRange(mouse.Y.Value) * bounds.Height + bounds.Top;
+            var scaledWidth = bounds.Width * scale;
+            var scaledHeight = bounds.Height * scale;
+            var scaledLeft = bounds.Left * scale;
+            var scaledTop = bounds.Top * scale;
+
+            var x = ClampToRange(mouse.X.Value) * scaledWidth + scaledLeft;
+            var y = ClampToRange(mouse.Y.Value) * scaledHeight + scaledTop;
             SetCursorPos((int)Math.Round(x), (int)Math.Round(y));
         }
 
@@ -83,6 +100,23 @@ public sealed class InputService
         };
 
         _ = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    private void HandleSpecial(SpecialPayload special)
+    {
+        if (!string.Equals(special.Action, "ctrl_alt_del", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogDebug("Unknown special input action {Action}", special.Action);
+            return;
+        }
+
+        if (!SendSAS(asUser: false))
+        {
+            _logger.LogWarning("Failed to send secure attention sequence (Ctrl+Alt+Del). LastError={LastError}", Marshal.GetLastWin32Error());
+            return;
+        }
+
+        _logger.LogInformation("Sent secure attention sequence (Ctrl+Alt+Del)");
     }
 
     private static void SendButton(MouseButton button, bool? state)
@@ -191,6 +225,9 @@ public sealed class InputService
 
     [DllImport("user32.dll")]
     private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
+    [DllImport("sas.dll", SetLastError = true)]
+    private static extern bool SendSAS(bool asUser);
 
     #endregion
 }

@@ -32,6 +32,7 @@ publish() {
 
 publish "$ROOT/src/Service/P2PRD.Service.csproj" "Service"
 publish "$ROOT/src/OperatorConsole/OperatorConsole.csproj" "OperatorConsole"
+publish "$ROOT/src/Configurator/Configurator.csproj" "Configurator"
 
 if [[ "$SKIP_SIGNALING_SERVER" != "true" ]]; then
   publish "$ROOT/src/SignalingServer/SignalingServer.csproj" "SignalingServer"

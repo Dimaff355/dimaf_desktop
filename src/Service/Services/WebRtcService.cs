@@ -1,10 +1,15 @@
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using RemoteDesktop.Shared.Config;
 using RemoteDesktop.Shared.Messaging;
 using SIPSorcery.Net;
 using SIPSorcery.SDP;
+using SIPSorceryMedia.Abstractions;
+using SIPSorceryMedia.Abstractions.V1;
+using SIPSorceryMedia.Encoders;
 
 namespace RemoteDesktop.Service.Services;
 
@@ -15,11 +20,17 @@ public sealed class WebRtcService : IAsyncDisposable
     private RTCDataChannel? _controlChannel;
     private RTCDataChannel? _frameChannel;
     private MediaStreamTrack? _videoTrack;
+    private VpxEncoder? _vp8Encoder;
+    private int _encoderWidth;
+    private int _encoderHeight;
+    private uint _videoTimestamp;
+    private ushort _videoSequenceNumber;
     private ImmutableArray<string> _stunServers = ImmutableArray<string>.Empty;
     private readonly List<SDPMediaFormat> _videoFormats = new()
     {
         new SDPMediaFormat((int)SDPWellKnownMediaFormatsEnum.VP8, SDPMediaFormatsEnum.VP8)
     };
+    private const int VideoClockRate = 90000;
 
     public event Func<SdpOffer, Task>? OfferReady;
     public event Func<IceCandidate, Task>? IceCandidateReady;
@@ -37,14 +48,14 @@ public sealed class WebRtcService : IAsyncDisposable
         _logger = logger;
     }
 
-    public async Task StartOfferAsync(IEnumerable<string> stunServers, CancellationToken cancellationToken)
+    public async Task StartOfferAsync(IEnumerable<string> stunServers, TurnConfig? turn, CancellationToken cancellationToken)
     {
         _stunServers = stunServers.ToImmutableArray();
         await ResetAsync().ConfigureAwait(false);
 
         var config = new RTCConfiguration
         {
-            iceServers = _stunServers.Select(url => new RTCIceServer { urls = new List<string> { url } }).ToList()
+            iceServers = BuildIceServers(turn)
         };
 
         _peerConnection = new RTCPeerConnection(config);
@@ -227,8 +238,71 @@ public sealed class WebRtcService : IAsyncDisposable
             return Task.FromResult(false);
         }
 
-        // TODO: wire a real encoder (VP8/H264) to emit RTP samples over the negotiated video track.
-        return Task.FromResult(false);
+        if (frame.BgraData.Length == 0)
+        {
+            return Task.FromResult(false);
+        }
+
+        if (_vp8Encoder is null || _encoderWidth != frame.Width || _encoderHeight != frame.Height)
+        {
+            _vp8Encoder?.Dispose();
+            _vp8Encoder = new VpxEncoder();
+            _vp8Encoder.InitEncoder((uint)frame.Width, (uint)frame.Height, 30);
+            _encoderWidth = frame.Width;
+            _encoderHeight = frame.Height;
+            _videoTimestamp = 0;
+            _videoSequenceNumber = 0;
+        }
+
+        var encoded = _vp8Encoder!.Encode(frame.BgraData, VideoPixelFormatsEnum.Bgra, (uint)frame.Width, (uint)frame.Height);
+        if (encoded == null || encoded.Count == 0)
+        {
+            return Task.FromResult(false);
+        }
+
+        var payloadType = _videoFormats[0].FormatID;
+        var ssrc = _videoTrack.Ssrc ?? (uint)RandomNumberGenerator.GetInt32(int.MaxValue);
+        var sent = false;
+
+        foreach (var fragment in encoded)
+        {
+            var packet = new RTPPacket(fragment.EncodedData.Length)
+            {
+                Header =
+                {
+                    PayloadType = payloadType,
+                    SequenceNumber = _videoSequenceNumber++,
+                    Timestamp = _videoTimestamp,
+                    MarkerBit = fragment.IsKeyFrame,
+                    SyncSource = ssrc
+                }
+            };
+
+            Buffer.BlockCopy(fragment.EncodedData, 0, packet.Payload, 0, fragment.EncodedData.Length);
+
+            _peerConnection.SendRtpRaw(SDPMediaTypesEnum.video, packet.GetBytes(), packet.Header.Timestamp, packet.Header.MarkerBit, packet.Header.PayloadType, packet.Header.SyncSource, packet.Header.SequenceNumber);
+            sent = true;
+        }
+
+        _videoTimestamp += (uint)(VideoClockRate / 30);
+        return Task.FromResult(sent);
+    }
+
+    private List<RTCIceServer> BuildIceServers(TurnConfig? turn)
+    {
+        var servers = _stunServers.Select(url => new RTCIceServer { urls = new List<string> { url } }).ToList();
+        if (turn is not null && !string.IsNullOrWhiteSpace(turn.Url))
+        {
+            servers.Add(new RTCIceServer
+            {
+                urls = new List<string> { turn.Url },
+                username = turn.Username,
+                credential = turn.Credential,
+                credentialType = RTCIceCredentialType.password
+            });
+        }
+
+        return servers;
     }
 
     public Task ResetAsync()
@@ -244,6 +318,10 @@ public sealed class WebRtcService : IAsyncDisposable
         _controlChannel = null;
         _frameChannel = null;
         _videoTrack = null;
+        _vp8Encoder?.Dispose();
+        _vp8Encoder = null;
+        _encoderWidth = 0;
+        _encoderHeight = 0;
 
         return Task.CompletedTask;
     }
