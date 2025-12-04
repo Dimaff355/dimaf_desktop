@@ -5,10 +5,12 @@ using RemoteDesktop.Service.Services;
 using RemoteDesktop.Shared.Security;
 using Serilog;
 using System.Runtime.InteropServices;
+using RemoteDesktop.Service.Utilities;
 
 if (OperatingSystem.IsWindows())
 {
     TryEnablePerMonitorDpiAwareness();
+    PrivilegeHelper.EnableRequiredPrivileges();
 }
 
 var builder = Host.CreateApplicationBuilder(args);

@@ -78,6 +78,14 @@ public sealed class InputService
             SendButton(MouseButton.Left, buttons.Left);
             SendButton(MouseButton.Right, buttons.Right);
             SendButton(MouseButton.Middle, buttons.Middle);
+            if (buttons.X1.HasValue)
+            {
+                SendXButton(1, buttons.X1.Value);
+            }
+            if (buttons.X2.HasValue)
+            {
+                SendXButton(2, buttons.X2.Value);
+            }
         }
 
         if (mouse.Wheel.HasValue)
@@ -85,16 +93,28 @@ public sealed class InputService
             var delta = (int)Math.Round(mouse.Wheel.Value * 120); // WHEEL_DELTA multiplier
             SendMouseEvent(MouseEventFlags.WHEEL, mouseData: delta);
         }
+
+        if (mouse.HWheel.HasValue)
+        {
+            var hDelta = (int)Math.Round(mouse.HWheel.Value * 120);
+            SendMouseEvent(MouseEventFlags.HWHEEL, mouseData: hDelta);
+        }
     }
 
     private static void HandleKeyboard(KeyboardPayload keyboard)
     {
+        uint flags = KEYEVENTF_SCANCODE;
+        if (keyboard.IsExtended)
+            flags |= KEYEVENTF_EXTENDEDKEY;
+        if (!keyboard.IsKeyDown)
+            flags |= KEYEVENTF_KEYUP;
+
         var inputs = new INPUT[1];
         inputs[0].type = INPUT_KEYBOARD;
         inputs[0].U.ki = new KEYBDINPUT
         {
             wScan = (ushort)keyboard.ScanCode,
-            dwFlags = KEYEVENTF_SCANCODE | (keyboard.IsKeyDown ? 0u : KEYEVENTF_KEYUP),
+            dwFlags = flags,
             time = 0,
             dwExtraInfo = IntPtr.Zero
         };
@@ -102,22 +122,35 @@ public sealed class InputService
         _ = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
     }
 
-    private void HandleSpecial(SpecialPayload special)
+private void HandleSpecial(SpecialPayload special)
+{
+    if (!string.Equals(special.Action, "ctrl_alt_del", StringComparison.OrdinalIgnoreCase))
     {
-        if (!string.Equals(special.Action, "ctrl_alt_del", StringComparison.OrdinalIgnoreCase))
-        {
-            _logger.LogDebug("Unknown special input action {Action}", special.Action);
-            return;
-        }
+        _logger.LogDebug("Unknown special input action {Action}", special.Action);
+        return;
+    }
 
+    try
+    {
+        // Пытаемся отправить Ctrl+Alt+Del
         if (!SendSAS(asUser: false))
         {
             _logger.LogWarning("Failed to send secure attention sequence (Ctrl+Alt+Del). LastError={LastError}", Marshal.GetLastWin32Error());
             return;
         }
-
         _logger.LogInformation("Sent secure attention sequence (Ctrl+Alt+Del)");
     }
+    catch (DllNotFoundException)
+    {
+        // Если файла sas.dll нет, ловим ошибку здесь и не даем программе упасть
+        _logger.LogWarning("sas.dll not found. Ctrl+Alt+Del is not supported on this system.");
+    }
+    catch (Exception ex)
+    {
+        // Ловим любые другие неожиданные ошибки
+        _logger.LogWarning(ex, "Failed to send SAS due to an unexpected error.");
+    }
+}
 
     private static void SendButton(MouseButton button, bool? state)
     {
@@ -136,6 +169,14 @@ public sealed class InputService
 
         SendMouseEvent(flags);
     }
+
+    private static void SendXButton(int buttonNumber, bool isDown)
+    {
+        int mouseData = buttonNumber == 1 ? XBUTTON1 : XBUTTON2;
+        var flags = isDown ? MouseEventFlags.XDOWN : MouseEventFlags.XUP;
+        SendMouseEvent(flags, mouseData: mouseData);
+    }
+
 
     private static void SendMouseEvent(MouseEventFlags flags, int mouseData = 0)
     {
@@ -170,6 +211,8 @@ public sealed class InputService
 
     private const uint KEYEVENTF_SCANCODE = 0x0008;
     private const uint KEYEVENTF_KEYUP = 0x0002;
+    private const int XBUTTON1 = 0x0001;
+    private const int XBUTTON2 = 0x0002;
 
     [Flags]
     private enum MouseEventFlags : uint
@@ -181,8 +224,11 @@ public sealed class InputService
         RIGHTUP = 0x0010,
         MIDDLEDOWN = 0x0020,
         MIDDLEUP = 0x0040,
+        XDOWN = 0x0080,
+        XUP = 0x0100,
         ABSOLUTE = 0x8000,
-        WHEEL = 0x0800
+        WHEEL = 0x0800,
+        HWHEEL = 0x1000
     }
 
     [StructLayout(LayoutKind.Sequential)]

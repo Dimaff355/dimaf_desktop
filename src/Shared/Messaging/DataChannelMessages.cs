@@ -101,18 +101,22 @@ public sealed record MousePayload(
     [property: JsonPropertyName("x")] double? X,
     [property: JsonPropertyName("y")] double? Y,
     [property: JsonPropertyName("wheel")] double? Wheel,
+    [property: JsonPropertyName("hWheel")] double? HWheel,
     [property: JsonPropertyName("buttons")] MouseButtons? Buttons
 );
 
 public sealed record MouseButtons(
     [property: JsonPropertyName("left")] bool? Left,
     [property: JsonPropertyName("right")] bool? Right,
-    [property: JsonPropertyName("middle")] bool? Middle
+    [property: JsonPropertyName("middle")] bool? Middle,
+    [property: JsonPropertyName("x1")] bool? X1,
+    [property: JsonPropertyName("x2")] bool? X2
 );
 
 public sealed record KeyboardPayload(
     [property: JsonPropertyName("scan_code")] int ScanCode,
-    [property: JsonPropertyName("is_key_down")] bool IsKeyDown
+    [property: JsonPropertyName("is_key_down")] bool IsKeyDown,
+    [property: JsonPropertyName("is_extended")] bool IsExtended = false
 );
 
 public sealed record SpecialPayload(

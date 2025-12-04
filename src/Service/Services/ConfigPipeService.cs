@@ -228,11 +228,14 @@ public sealed class ConfigPipeService : BackgroundService
 
     private NamedPipeServerStream CreatePipe()
     {
-        if (OperatingSystem.IsWindows())
+if (OperatingSystem.IsWindows())
         {
             var security = new PipeSecurity();
+            // Разрешаем Администраторам и СИСТЕМЕ
             security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), PipeAccessRights.FullControl, AccessControlType.Allow));
             security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), PipeAccessRights.FullControl, AccessControlType.Allow));
+            // ВАЖНО: Разрешаем текущему пользователю (Authenticated Users), чтобы Configurator мог подключиться без "Run as Admin"
+            security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null), PipeAccessRights.ReadWrite, AccessControlType.Allow));
 
             return NamedPipeServerStreamAcl.Create(
                 PipeName,
@@ -245,7 +248,6 @@ public sealed class ConfigPipeService : BackgroundService
                 pipeSecurity: security,
                 inheritability: HandleInheritability.None);
         }
-
         return new NamedPipeServerStream(PipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Message, PipeOptions.Asynchronous);
     }
 }

@@ -30,6 +30,30 @@ Ensure-Administrator
 
 $fullPath = Resolve-Path -Path $ExePath -ErrorAction Stop
 
+# Ensure data directories exist and set ACL
+$programData = [Environment]::GetFolderPath('CommonApplicationData')
+$appDataDir = Join-Path $programData "P2PRD"
+$configDir = $appDataDir
+$logsDir = Join-Path $appDataDir "logs"
+
+if (-not (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
+}
+if (-not (Test-Path $logsDir)) {
+    New-Item -ItemType Directory -Path $logsDir -Force | Out-Null
+}
+
+# Set ACL for both directories: SYSTEM and Administrators FullControl
+$acl = Get-Acl $configDir
+$sys = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::LocalSystemSid, $null)
+$admin = New-Object System.Security.Principal.SecurityIdentifier([System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+$ruleSys = New-Object System.Security.AccessControl.FileSystemAccessRule($sys, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+$ruleAdmin = New-Object System.Security.AccessControl.FileSystemAccessRule($admin, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+$acl.SetAccessRule($ruleSys)
+$acl.SetAccessRule($ruleAdmin)
+Set-Acl -Path $configDir -AclObject $acl
+Set-Acl -Path $logsDir -AclObject $acl
+
 $existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
 if ($existing) {
     if ($existing.Status -eq 'Running') {

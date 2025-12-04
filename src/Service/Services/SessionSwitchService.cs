@@ -7,12 +7,14 @@ namespace RemoteDesktop.Service.Services;
 public sealed class SessionSwitchService : BackgroundService
 {
     private readonly ILogger<SessionSwitchService> _logger;
+    private readonly MonitorService _monitorService;
     private readonly TimeSpan _pollInterval = TimeSpan.FromSeconds(5);
     private uint? _lastSessionId;
 
-    public SessionSwitchService(ILogger<SessionSwitchService> logger)
+    public SessionSwitchService(ILogger<SessionSwitchService> logger, MonitorService monitorService)
     {
         _logger = logger;
+        _monitorService = monitorService;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,6 +37,7 @@ public sealed class SessionSwitchService : BackgroundService
                     var state = DescribeState(sessionId);
                     _logger.LogInformation("Active console session changed: {SessionId} ({State})", sessionId, state);
                     _lastSessionId = sessionId;
+                    _monitorService.Refresh();
                 }
             }
             catch (OperationCanceledException)
