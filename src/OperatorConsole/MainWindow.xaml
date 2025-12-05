@@ -1,0 +1,38 @@
+<Window x:Class="OperatorConsole.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Remote Desktop Operator" Height="600" Width="800">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="5">
+            <TextBox x:Name="txtSignalingUrl" Width="200" Text="ws://localhost:5000/ws"/>
+            <TextBox x:Name="txtHostId" Width="150" Margin="5,0" Text=""/>
+            <PasswordBox x:Name="txtPassword" Width="100" Margin="5,0"/>
+            <Button x:Name="btnConnect" Content="Connect" Click="BtnConnect_Click" Width="80"/>
+            <Button x:Name="btnDisconnect" Content="Disconnect" Click="BtnDisconnect_Click" Width="80" IsEnabled="False"/>
+        </StackPanel>
+
+        <Grid Grid.Row="1">
+            <Image x:Name="imgVideo" Stretch="Uniform" MouseMove="ImgVideo_MouseMove" MouseDown="ImgVideo_MouseDown" MouseUp="ImgVideo_MouseUp" MouseWheel="ImgVideo_MouseWheel" Focusable="True"/>
+        </Grid>
+
+        <StatusBar Grid.Row="2">
+            <StatusBarItem>
+                <TextBlock x:Name="txtStatus">Disconnected</TextBlock>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <ComboBox x:Name="cmbMonitors" Width="200" SelectionChanged="CmbMonitors_SelectionChanged" IsEnabled="False"/>
+            </StatusBarItem>
+            <Separator/>
+            <StatusBarItem>
+                <Button x:Name="btnCAD" Content="Ctrl+Alt+Del" Click="BtnCAD_Click" IsEnabled="False"/>
+            </StatusBarItem>
+        </StatusBar>
+    </Grid>
+</Window>
